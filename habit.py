@@ -10,11 +10,13 @@ def generateHabitId(mode, id):
     :return: Generated habit ID as a string.
     """
     if mode == "add":
-        data = json.loads(open("./habits.json", "r").read())
+        file = open("./habits.json", "r")
+        data = json.loads(file.read())
         if data == []:
             habit_id = 1
         else:
             habit_id = int(data[-1]["habit_id"]) + 1
+        file.close()
         return habit_id
     elif mode == "edit":
         habit_id = id
@@ -25,9 +27,9 @@ class Habit:
     """
     Represents a habit with its details and progress.
     """
-    def __init__(self, habit_id, title, description, 
+    def __init__(self, title, description, 
                  frequency, category, significance, 
-                 progress_entries, end_date, mode, id="",  
+                 progress_entries, last_done, mode, id="",  
                  next_deadline=None):
         """
         Initialize a Habit object with provided information.
@@ -48,8 +50,8 @@ class Habit:
         self.title = title
         self.description = description
         self.active = True
-        self.start_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-        self.end_date = end_date
+        self.start_date = datetime.now().date()
+        self.end_date = last_done
         self.frequency = frequency
         self.successes = 0
         self.current_streak = 0
@@ -58,14 +60,14 @@ class Habit:
         self.significance = significance
         self.next_deadline = next_deadline
         self.progress_entries = progress_entries
-        self.days = 0
+        self.goal = 0
     
     def complete_habit(self):
         """
         Mark the habit as completed.
         """
-        self.active = False
-        self.end_date = datetime.now()
+        self.end_date = datetime.now().date()
+        self.progress_entries.append({"timestamp": datetime.now().replace(microsecond=0)})
 
     def reset_current_streak(self):
         """
@@ -80,7 +82,7 @@ class Habit:
         if self.current_streak > self.longest_streak:
             self.longest_streak = self.current_streak
 
-    def is_completed_today(self) -> bool:
+    def is_completed_today(self):
         """
         Check if the habit is completed today by checking the latest progress entry.
 
@@ -89,11 +91,9 @@ class Habit:
         if not self.progress_entries:
             return False
         latest_entry = self.progress_entries[-1]
-        return (latest_entry["comment"] 
-                and latest_entry["satisfaction_level"] >= 0 
-                and datetime.now().date() == latest_entry.get("timestamp", datetime.now()).date())
+        return datetime.now().date() == latest_entry["timestamp"].date()
 
-    def days_remaining(self) -> int:
+    def days_remaining(self):
         """
         Calculate the number of days remaining until the next deadline.
 
@@ -108,11 +108,11 @@ class Habit:
         Update the next deadline for the habit based on its frequency.
         """
         if self.frequency == "daily":
-            self.next_deadline = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.next_deadline = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
         elif self.frequency == "weekly":
-            self.next_deadline = (datetime.now() + timedelta(weeks=7)).strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.next_deadline = (datetime.now() + timedelta(weeks=1)).strftime("%Y-%m-%d %H:%M:%S")
         elif self.frequency == "monthly":
-            self.next_deadline = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.next_deadline = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
         else:
             raise ValueError(f"Unknown frequency: {self.frequency}")
 

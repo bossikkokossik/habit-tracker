@@ -10,7 +10,6 @@ from tkinter.messagebox import showinfo
 
 from analytics import Analytics
 from habit import Habit
-import habit
 
 customtkinter.set_appearance_mode("dark")
 customtkinter.set_default_color_theme("dark-blue")
@@ -79,8 +78,7 @@ class App(customtkinter.CTk):
         self.bt_edit.grid(row=1, column=0, padx=20, pady=10)
         self.bt_mark_done = customtkinter.CTkButton(self.left_side_panel, 
                                                     text="Mark Done", 
-                                                    command=self.mark_done_func, 
-                                                    state="disabled")
+                                                    command=self.mark_done_func)
         self.bt_mark_done.grid(row=2, column=0, padx=20, pady=10)
         self.bt_add_habit = customtkinter.CTkButton(self.left_side_panel, 
                                                     text="Edit", 
@@ -132,12 +130,12 @@ class App(customtkinter.CTk):
         
         cols = [
             "Habit", 
-            "Description", 
+            "Description",
+            "Category",
             "Frequency", 
             "Last Done", 
             "Current Streak", 
-            "Progress", 
-            "Done"
+            "Progress"
         ]
         treescroll = ttk.Scrollbar(self.right_dashboard,)
         treescroll.pack(side="right", fill="y")
@@ -149,14 +147,16 @@ class App(customtkinter.CTk):
         treescroll.config(command=treeview.yview)
          
         treeview.column("Habit", width=100)
-        treeview.column("Description", width=200)
-        treeview.column("Frequency", width=100)
+        treeview.column("Description", width=180)
+        treeview.column("Category", width=100)
+        treeview.column("Frequency", width=80)
         treeview.column("Last Done", width=100)
         treeview.column("Current Streak", width=100)
-        treeview.column("Progress", width=100)
+        treeview.column("Progress", width=80)
         
         treeview.heading("Habit", text="Habit")
         treeview.heading("Description", text="Description")
+        treeview.heading("Category", text="Category")
         treeview.heading("Frequency", text="Frequency")
         treeview.heading("Last Done", text="Last Done")
         treeview.heading("Current Streak", text="Current Streak")
@@ -165,13 +165,16 @@ class App(customtkinter.CTk):
         self.lists += self.loaded_data
         count = 1
         for record in self.loaded_data:
+            if datetime.now() > datetime.fromisoformat(record["next_deadline"]):
+                record["current_streak"] = 0
             lists = [
                 record["title"], 
-                record["description"], 
+                record["description"],
+                record["category"],
                 record["frequency"], 
-                record["progress_entries"][-1]["date"], 
+                datetime.fromisoformat(record["progress_entries"][-1]["timestamp"]).date() if record["progress_entries"] else "-", 
                 record["current_streak"], 
-                "{}/{}".format(record["successes"],record["days"])
+                "{}/{}".format(record["successes"],record["goal"])
             ]
             treeview.insert(parent="", index=tkinter.END, iid=count, text="", values=lists)
             count += 1
@@ -191,23 +194,27 @@ class App(customtkinter.CTk):
             item_id = treeview.identify_row(event.y)
             button_id = treeview.identify_column(event.x)
             try:
-                selectedVal = self.loaded_data[int(item_id)-1]
-                if selectedVal["progress_entries"][-1]["date"] == datetime.now().strftime("%Y-%m-%d"):
-                    self.bt_mark_done.configure(state="disabled")
+                selected_val = self.loaded_data[int(item_id)-1]
+                if selected_val["progress_entries"]:
+                    last_done = datetime.fromisoformat(selected_val["progress_entries"][-1]["timestamp"]).date()
+                    if last_done == datetime.now().date():
+                        self.bt_mark_done.configure(state="disabled")
+                    elif (selected_val["frequency"] == "weekly" 
+                        and last_done.isocalendar()[1] == datetime.now().isocalendar()[1] 
+                        and last_done.year == datetime.now().year):
+                        self.bt_mark_done.configure(state="disabled")
+                    elif (selected_val["frequency"] == "monthly" 
+                        and last_done.month == datetime.now().month
+                        and last_done.year == datetime.now().year):
+                        self.bt_mark_done.configure(state="disabled")
+                    else:
+                        self.bt_mark_done.configure(state="normal")
                 else:
                     self.bt_mark_done.configure(state="normal")
                 self.bt_add_habit.configure(state="normal")
                 self.bt_metrics.configure(state="normal")
             except Exception as e:
                 pass
-            if item_id and button_id == "#6":
-                self.dialog_habbit_number = item_id
-                self.edit_func()
-            elif item_id and button_id == "#7":
-                self.delete_func(item_id)
-            elif item_id and button_id == "#8":
-                self.dialog_habbit_number = item_id
-                self.metrics_func()
 
         treeview.bind("<Button-1>", on_tree_click)
         treeview.bind('<<TreeviewSelect>>', item_selected)
@@ -221,7 +228,7 @@ class App(customtkinter.CTk):
             filename (str): Name of the JSON file to save the data to.
         """
         with open(filename, 'w') as file:
-            json.dump(data, file)
+            json.dump(data, file, default=str)
 
     def load_data(self,filename):
         """
@@ -236,8 +243,7 @@ class App(customtkinter.CTk):
         try:
             with open(filename, 'r') as file:
                 data = json.loads(file.read())
-                return data       
-
+                return data
         except Exception as e:
             with open(filename, "w", encoding="utf-8") as f:
                 f.write("[\n]")
@@ -249,44 +255,38 @@ class App(customtkinter.CTk):
         This function creates a new Habit instance and updates the data accordingly.
         """
         data = json.loads(open("./habits.json", "r").read())
-        category = "habits"
+        category = self.category_entry.get()
         significance = self.goal_entry.get()
         habit_id = self.id + 1
         self.id = habit_id    
         frequency = self.combobox.get()
         title = self.habit_name_entry.get()
         description = self.habit_description_entry.get()
-        progress_entries = [{"date": "none", "time": "none"}]
-        end_date = ["Have not been marked down"]
+        progress_entries = []
+        last_done = ["Have not been marked down"]
         
-        habits = habit.Habit(habit_id,title, description, frequency, category, 
-                             significance, progress_entries, end_date, "add")
+        habits = Habit(title, description, frequency, category, 
+                             significance, progress_entries, last_done, "add")
         habits.update_next_deadline()
-        if frequency == "daily":
-            habits.days = int(significance)
-        elif frequency == "weekly":
-            habits.days = int(significance) * 7
-        elif frequency == "monthly":
-            habits.days = int(significance) * 30
+        habits.goal = int(significance)
         data.append({
-            "habit_id": habits.habit_id, 
+            "habit_id": habit_id, 
             "title": habits.title,
             "description": habits.description,
             "active": habits.active,
             "start_date": habits.start_date,
-            "end_date": habits.end_date,
+            "last_done": habits.last_done,
             "frequency": habits.frequency,
             "successes": habits.successes,
             "current_streak": habits.current_streak,
             "longest_streak": habits.longest_streak,
             "category": habits.category,
-            "notify": habits.notify,
             "significance": habits.significance,
             "next_deadline": habits.next_deadline,
             "progress_entries": habits.progress_entries,
-            "days": habits.days
+            "goal": habits.goal
         })
-        self.save_data(data,"habits.json")
+        self.save_data(data, "habits.json")
         self.dash_func()
     
     def adding_func_edit(self, mode, id, progess_entries):
@@ -300,7 +300,7 @@ class App(customtkinter.CTk):
             id (str): The habit ID.
             progress_entries (list): The progress entries for the habit.
         """
-        category = "habits"
+        category = self.category_entry.get()
         significance = self.goal_entry.get()
         habit_id = id
         self.id = habit_id    
@@ -309,18 +309,12 @@ class App(customtkinter.CTk):
         title = self.habit_name_entry.get()
         description = self.habit_description_entry.get()
         progress_entries = progess_entries
-        end_date = ["Have not been marked down"]
+        last_done = ["Have not been marked down"]
 
-        habits = habit.Habit(habit_id,title, description, frequency, category,
-                             significance, progress_entries,end_date, mode, id)
+        habits = Habit(title, description, frequency, category,
+                       significance, progress_entries, last_done, mode, id)
         habits.update_next_deadline()
-        
-        if frequency == "daily":
-            habits.days = int(significance)
-        elif frequency == "weekly":
-            habits.days = int(significance)*7
-        elif frequency == "monthly":
-            habits.days = int(significance)*30
+        habits.goal = int(significance)
 
         self.selected_value_list[int(self.id)-1]["habit_id"] = habit_id
         self.selected_value_list[int(self.id)-1]["title"] = title
@@ -329,12 +323,12 @@ class App(customtkinter.CTk):
         self.selected_value_list[int(self.id)-1]["category"] = category
         self.selected_value_list[int(self.id)-1]["significance"] = significance
         self.selected_value_list[int(self.id)-1]["progress_entries"] = progress_entries
-        self.selected_value_list[int(self.id)-1]["end_date"] = end_date
+        self.selected_value_list[int(self.id)-1]["last_done"] = last_done
                            
         self.save_data(self.selected_value_list, "habits.json")
         self.dash_func()
 
-    def delete_func(self, itemId):
+    def delete_func(self, item_id):
         """
         Delete a habit and update the data.
 
@@ -346,13 +340,13 @@ class App(customtkinter.CTk):
         self.dialog_habbit_number = ""
         data = self.load_data("./habits.json")
         for index, item in enumerate(data):
-             if int(item["habit_id"]) > int(itemId)-1:
+             if int(item["habit_id"]) > int(item_id)-1:
                  data[index]["habit_id"] = str(int(data[index]["habit_id"]) - 1)   
-        del data[int(itemId) - 1]
+        del data[int(item_id) - 1]
         self.save_data(data, "./habits.json")
         self.dash_func()
            
-    def save_changes(self, mode, id="", progess_entries=[{"date": "none", "time": "none"}]):
+    def save_changes(self, mode, id="", progess_entries=[]):
         """
         Save changes made to a habit.
 
@@ -382,10 +376,10 @@ class App(customtkinter.CTk):
         self.right_left_side_panel.grid_rowconfigure((0, 1, 2, 3), weight=0)
         self.right_left_side_panel.grid_rowconfigure((4, 5), weight=1)
         
-        self.logo_label_edit = customtkinter.CTkLabel(self.right_left_side_panel, 
+        self.goal_label = customtkinter.CTkLabel(self.right_left_side_panel, 
                                                       text="Add Habit Page! \n", 
                                                       font=customtkinter.CTkFont(size=20, weight="bold"))
-        self.logo_label_edit.grid(row=1, column=0, padx=20, pady=(20, 10))
+        self.goal_label.grid(row=1, column=0, padx=20, pady=(20, 10))
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
                                                text="Save", command=self.adding_func)
         self.bt_save.grid(row=2, column=0, padx=20, pady=(100, 0))
@@ -395,7 +389,7 @@ class App(customtkinter.CTk):
                                                     values=["daily", "weekly", "monthly"],
                                                     command=optionmenu_callback)
         self.combobox.grid(row=3, column=0, padx=20, pady=(10,0))
-        self.combobox.set("Select Periodicity")
+        self.combobox.set("Select frequency")
         self.bt_cancel = customtkinter.CTkButton(master=self.right_left_side_panel, 
                                                  text="Cancel", 
                                                  command=self.dash_func)
@@ -408,32 +402,44 @@ class App(customtkinter.CTk):
                                          expand=True, padx=5, pady=5)
         
         self.habit_name_label = customtkinter.CTkLabel(self.right_right_side_panel, 
-                                                       text="Habit Name \n", 
+                                                       text="Habit name", 
                                                        font=customtkinter.CTkFont(size=20, weight="bold"))
-        self.habit_name_label.pack()
+        self.habit_name_label.pack(pady=(25, 0))
         self.habit_name_entry = customtkinter.CTkEntry(master=self.right_right_side_panel, 
                                                        corner_radius=10, 
                                                        fg_color="black", 
-                                                       width=555, 
+                                                       width=550, 
                                                        height=50)
         self.habit_name_entry.pack(padx=0, pady=20)
         self.logo_label = customtkinter.CTkLabel(self.right_right_side_panel, 
-                                                 text="Habit Description \n", 
+                                                 text="Habit description", 
                                                  font=customtkinter.CTkFont(size=20, weight="bold"))
         self.logo_label.pack()
         self.habit_description_entry = customtkinter.CTkEntry(master=self.right_right_side_panel, 
                                                               corner_radius=10, 
                                                               fg_color="black", 
-                                                              width=555, height=50)
+                                                              width=550, 
+                                                              height=50)
         self.habit_description_entry.pack(padx=0, pady=20)
-        self.logo_label_edit = customtkinter.CTkLabel(self.right_right_side_panel, 
-                                                text="Goal \n", 
+        self.category_label = customtkinter.CTkLabel(self.right_right_side_panel, 
+                                                text="Category (change according to your needs)", 
                                                 font=customtkinter.CTkFont(size=20, weight="bold"))
-        self.logo_label_edit.pack()
+        self.category_label.pack()
+        self.category_entry = customtkinter.CTkEntry(master=self.right_right_side_panel, 
+                                                     corner_radius=10, 
+                                                     fg_color="black", 
+                                                     width=550, 
+                                                     height=50)
+        self.category_entry.insert(0, "personal")
+        self.category_entry.pack(padx=0, pady=20)
+        self.goal_label = customtkinter.CTkLabel(self.right_right_side_panel, 
+                                                text="Goal (how many times to complete)", 
+                                                font=customtkinter.CTkFont(size=20, weight="bold"))
+        self.goal_label.pack()
         self.goal_entry = customtkinter.CTkEntry(master=self.right_right_side_panel, 
                                                  corner_radius=10, 
                                                  fg_color="black", 
-                                                 width=555, 
+                                                 width=550, 
                                                  height=50)
         self.goal_entry.pack(padx=0, pady=20)
         
@@ -443,31 +449,58 @@ class App(customtkinter.CTk):
 
         This function updates the progress and streak information for a habit when it is marked as done for the current date.
         """
-        date = datetime.now().strftime("%Y-%m-%d")
-        currentTime = datetime.now().strftime("%H:%M:%S")
-        loadedData = self.load_data("./habits.json")
+        loaded_data = self.load_data("./habits.json")
 
         if self.dialog_habbit_number == "":
             showinfo("Error", "Choose a habit fom dashboard")
             return
 
-        itemId = self.dialog_habbit_number
-        itemId = int(itemId) - 1
+        item_id = self.dialog_habbit_number
+        item_id = int(item_id) - 1
 
-        if loadedData[itemId]["progress_entries"][-1]["date"] == date:
-            showinfo("The Habit is Done", "THe Habit is done Today")
+        selected_habit = Habit(
+            loaded_data[item_id]["title"],
+            loaded_data[item_id]["description"],
+            loaded_data[item_id]["frequency"],
+            loaded_data[item_id]["category"],
+            loaded_data[item_id]["significance"],
+            loaded_data[item_id]["progress_entries"],
+            loaded_data[item_id]["last_done"],
+            "edit",
+            loaded_data[item_id]["habit_id"]
+        )
+        selected_habit.successes = loaded_data[item_id]["successes"]
+        selected_habit.current_streak = loaded_data[item_id]["current_streak"]
+        selected_habit.longest_streak = loaded_data[item_id]["longest_streak"]
+        selected_habit.next_deadline = loaded_data[item_id]["next_deadline"]
 
-        if loadedData[itemId]["progress_entries"][-1]["date"] != date:
-            loadedData[itemId]["successes"] = int(loadedData[itemId]["successes"]) + 1
-            loadedData[itemId]["current_streak"] = int(loadedData[itemId]["current_streak"]) + 1
-            loadedData[itemId]["progress_entries"].append({"date": date, "time": currentTime}) 
-            if self.is_completed_today_app(loadedData[itemId]):
-                loadedData[itemId]["longest_streak"] += 1
-            else: loadedData[itemId]["longest_streak"] = 0
-            if loadedData[itemId]["current_streak"] >= loadedData[itemId]["longest_streak"]:
-                loadedData[itemId]["longest_streak"] = loadedData[itemId]["current_streak"]
+        last_done = (datetime.fromisoformat(selected_habit.progress_entries[-1]["timestamp"])
+                     if selected_habit.progress_entries and "timestamp" in selected_habit.progress_entries[-1]
+                     else datetime(1969, 7, 20)) 
+        if selected_habit.is_completed_today():
+            showinfo("The habit is done", "The habit has been already done today!")
+        elif (selected_habit.frequency == "weekly" 
+              and last_done.isocalendar()[1] == datetime.now().isocalendar()[1] 
+              and last_done.year == datetime.now().year):
+            showinfo("The habit is done", "The habit has been already done this week!")
+        elif (selected_habit.frequency == "monthly" 
+              and last_done.month == datetime.now().month
+              and last_done.year == datetime.now().year):
+            showinfo("The habit is done", "The habit has been already done this month!")
+        else:
+            selected_habit.complete_habit()
+            selected_habit.update_success_status()
+            selected_habit.update_longest_streak()
+            selected_habit.update_next_deadline()
 
-            self.save_data(loadedData, "habits.json")
+            loaded_data[item_id]["last_done"] = selected_habit.last_done
+            loaded_data[item_id]["successes"] = selected_habit.successes
+            loaded_data[item_id]["current_streak"] = selected_habit.current_streak
+            loaded_data[item_id]["longest_streak"] = selected_habit.longest_streak
+            loaded_data[item_id]["next_deadline"] = selected_habit.next_deadline
+            loaded_data[item_id]["progress_entries"] = selected_habit.progress_entries
+
+            self.save_data(loaded_data, "habits.json")
             self.dialog_habbit_number = ""
             self.dash_func()
               
@@ -483,7 +516,7 @@ class App(customtkinter.CTk):
         """
         return datetime.strptime(date, "%Y-%m-%d")
     
-    def is_completed_today_app(self, selectedVal):
+    def is_completed_today_app(self, selected_val):
         """
         Check if a habit was completed today based on the selected value.
 
@@ -496,7 +529,8 @@ class App(customtkinter.CTk):
         Returns:
             bool: True if the habit was completed today, False otherwise.
         """
-        if datetime.now() == self.parse_date_time(selectedVal["progress_entries"][-1]["date"]):
+        if (selected_val["progress_entries"]
+            and datetime.now().date() == datetime.fromisoformat(selected_val["progress_entries"][-1]["timestamp"]).date()):
             return True
         else: return False
 
@@ -542,8 +576,8 @@ class App(customtkinter.CTk):
                                                command=self.dash_func)
         self.bt_back.grid(row=2, column=0, padx=20, pady=(100, 0))
         self.bt_back = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Open History", 
-                                               command=partial(self.openHistory, self.selected_value))
+                                               text="Open history", 
+                                               command=partial(self.open_history, self.selected_value))
         self.bt_back.grid(row=2, column=0, padx=20, pady=(10, 0))
 
         self.right_right_side_panel = customtkinter.CTkFrame(self.right_dashboard, 
@@ -553,19 +587,11 @@ class App(customtkinter.CTk):
                                          expand=False, padx=5, pady=5)
         
         habit_labels = []
-        if self.selected_value["progress_entries"][-1]["date"] == "none":
-            self.selected_value["end_date"] = "Never"
-        else:
-            self.selected_value["end_date"] = (
-                self.selected_value["progress_entries"][-1]["date"] 
-                + " at " + self.selected_value["progress_entries"][-1]["time"]
-            )
         habit_texts = ["Habit name: {}".format(self.selected_value["title"]), 
                        "Created on: {}".format(self.selected_value["start_date"]), 
-                       "First done on: {}".format(self.selected_value["start_date"]), 
-                       "Last done on: {}".format(self.selected_value["end_date"]), 
-                       "Current Streak: {}".format(self.selected_value["current_streak"]), 
-                       "Goal Compliation progress: {}/{}".format(self.selected_value["successes"], self.selected_value["days"]), 
+                       "Last done on: {}".format(self.selected_value["last_done"]), 
+                       "Current streak: {}".format(self.selected_value["current_streak"]), 
+                       "Goal progress: {}/{}".format(self.selected_value["successes"], self.selected_value["goal"]), 
                        "Longest streak: {}".format(self.selected_value["longest_streak"])]
         for text_ in habit_texts:
             label = customtkinter.CTkLabel(master=self.right_right_side_panel, 
@@ -596,21 +622,21 @@ class App(customtkinter.CTk):
             showinfo("Error", "No habits availbale to show analytics.First add Habits")
             return
         
-        def clearFrame():
+        def clear_frame():
             try:
                 for wid in self.right_side_dash.winfo_children:
                     wid.destroy()
             except Exception as e:
                 pass
 
-        def makeTable(formate, data, result):
-            clearFrame()
+        def make_table(format, data, result):
+            clear_frame()
             try:
                self.right_side_dash.pack_forget()
             except Exception as e:
                 pass
 
-            if formate == "remainingTime":
+            if format == "remainingTime":
                 self.right_side_dash = customtkinter.CTkFrame(self.right_dashboard)
                 self.right_side_dash.pack(side=tkinter.LEFT, fill=tkinter.BOTH, 
                                           expand=True, pady=5 ,padx=(0, 5))
@@ -632,23 +658,22 @@ class App(customtkinter.CTk):
 
                 count = 1
                 for record in data:
-                    remainingTime = (record["next_deadline"] - datetime.now()).days
-                    lists = [record["title"], remainingTime]
+                    remaining_time = (record["next_deadline"] - datetime.now()).days
+                    lists = [record["title"], remaining_time]
                     treeview.insert(parent="", index=tkinter.END, iid=count, text="", values=lists)
                     count+=1
 
                 lists = ["average", result]
                 treeview.insert(parent="", index=tkinter.END, iid=count, text="", values=lists)
 
-            if formate == "activeHabits":
+            if format == "activeHabits":
                 self.right_side_dash = customtkinter.CTkFrame(self.right_dashboard)
                 self.right_side_dash.pack(side=tkinter.LEFT, fill=tkinter.BOTH, 
                                           expand=True, pady=5 ,padx=(0, 5))
                 cols = [
-                    "Active Habits", 
-                    "Description", 
-                    "Last Done", 
-                    "Current Streak", 
+                    "Habit", 
+                    "Last done", 
+                    "Current streak", 
                     "Progress", 
                     "Done"
                 ]
@@ -659,32 +684,29 @@ class App(customtkinter.CTk):
                 treeview.pack(side="top", fill="both", expand=True, padx=5, pady=5)
                 treescroll.config(command=treeview.yview)
                 
-                treeview.column("Active Habits", width=100)
-                treeview.column("Description", width=200)
-                treeview.column("Last Done", width=100)
-                treeview.column("Current Streak", width=100)
-                treeview.column("Progress", width=100)
+                treeview.column("Habit", width=140)
+                treeview.column("Last done", width=125)
+                treeview.column("Current streak", width=125)
+                treeview.column("Progress", width=125)
                 
-                treeview.heading("Active Habits", text="Active Habits")
-                treeview.heading("Description", text="Description")
-                treeview.heading("Last Done", text="Last Done")
-                treeview.heading("Current Streak", text="Current Streak")
+                treeview.heading("Habit", text="Habit")
+                treeview.heading("Last done", text="Last done")
+                treeview.heading("Current streak", text="Current streak")
                 treeview.heading("Progress", text="Progress")
 
                 count = 1
                 for record in data:
                     lists = [
-                        record["title"], 
-                        record["description"], 
-                        record["progress_entries"][-1]["date"], 
+                        record["title"],  
+                        datetime.fromisoformat(record["progress_entries"][-1]["timestamp"]).date() if record["progress_entries"] else "-", 
                         record["current_streak"], 
-                        "{}/{}".format(record["successes"], record["days"])
+                        "{}/{}".format(record["successes"], record["goal"])
                     ]
                     treeview.insert(parent="", index=tkinter.END, 
                                     iid=count, text="", values=lists)
                     count += 1
 
-            if formate == "streaklength": 
+            if format == "streaklength": 
                 self.right_side_dash = customtkinter.CTkFrame(self.right_dashboard)
                 self.right_side_dash.pack(side=tkinter.LEFT, fill=tkinter.BOTH, 
                                           expand=True, pady=5, padx=(0, 5))
@@ -713,11 +735,11 @@ class App(customtkinter.CTk):
                 treeview.insert(parent="", index=tkinter.END, 
                                 iid=count, text="", values=lists)
 
-            if formate == "topStreak":
+            if format == "topStreak":
                 self.right_side_dash = customtkinter.CTkFrame(self.right_dashboard)
                 self.right_side_dash.pack(side=tkinter.LEFT, fill=tkinter.BOTH, 
                                           expand=True, pady=5, padx=(0, 5))
-                cols = ["Habit", "Top Streak"]
+                cols = ["Habit", "Longest streak"]
                 treescroll = ttk.Scrollbar(self.right_side_dash)
                 treescroll.pack(side="right", fill="y")
                 treeview = ttk.Treeview(self.right_side_dash, 
@@ -729,35 +751,59 @@ class App(customtkinter.CTk):
                 treescroll.config(command=treeview.yview)
 
                 treeview.column("Habit", width=100)
-                treeview.column("Top Streak", width=200)
+                treeview.column("Longest streak", width=200)
 
                 treeview.heading("Habit", text="Habit")
-                treeview.heading("Top Streak", text="Top Streak")
+                treeview.heading("Longest streak", text="Longest streak")
 
                 count = 1
-                for record in data:
-                    lists = [record["title"], record["longest_streak"]]
+                for record, streak in zip(data, result):
+                    lists = [record["title"], streak]
                     treeview.insert(parent="", index=tkinter.END, iid=count, 
                                     text="", values=lists)
                     count += 1
 
-                lists = ["Top Streak", result]
-                treeview.insert(parent="", index=tkinter.END, iid=count, 
-                                text="", values=lists)
+        def make_habits_with_frequency_table():
+            def submit():
+                habits_with_frequency = analytics_methods.habits_with_frequency(habits, frequency.get())
+                make_table("activeHabits", 
+                           [habit.__dict__  for habit in habits_with_frequency], 
+                           habits_with_frequency)
 
-        def habitInPeriadTableMaker(mode, text=""):
-            def getDateandSubmit():
-                st = startDate.get_date()
-                et = endDate.get_date()
+            clear_frame()
+            try:
+               self.right_side_dash.pack_forget()
+            except Exception as e:
+                pass
 
-                st = datetime.combine(st, datetime.time(datetime.now()))
-                et = datetime.combine(et, datetime.time(datetime.now()))
+            self.right_side_dash = customtkinter.CTkFrame(self.right_dashboard)
+            self.right_side_dash.pack(side=tkinter.LEFT, fill=tkinter.BOTH, 
+                                      expand=True, pady=5, padx=(0, 5))
 
-                habitsInPeriod = analytics_methods.habits_in_period(data, st, et)
-                makeTable("activeHabits", [d.__dict__  for d in habitsInPeriod], 
-                          habitsInPeriod)
+            text_label = customtkinter.CTkLabel(self.right_side_dash, 
+                                                text="Choose frequency to display", 
+                                                font=customtkinter.CTkFont(size=20))
+            text_label.pack(pady=(25, 5))
+            frequency = customtkinter.CTkOptionMenu(master=self.right_side_dash,
+                                                    values=["daily", "weekly", "monthly"],
+                                                    command=lambda choice: choice)
+            frequency.set("daily")
+            frequency.pack(pady=5)
+            get_date_btn = customtkinter.CTkButton(self.right_side_dash, 
+                                                    text="Show habits", 
+                                                    command=submit)
+            get_date_btn.pack(pady=10)
 
-            clearFrame()
+        def make_habits_in_period_table(mode, text=""):
+            def get_date_and_submit():
+                st = start_date.get_date()
+                et = end_date.get_date()
+
+                habits_in_period = analytics_methods.habits_in_period(data, st, et)
+                make_table("activeHabits", [d.__dict__  for d in habits_in_period], 
+                           habits_in_period)
+
+            clear_frame()
             try:
                self.right_side_dash.pack_forget()
             except Exception as e:
@@ -768,39 +814,48 @@ class App(customtkinter.CTk):
                                       expand=True, pady=5, padx=(0, 5))
 
             if mode == "single":
-                textLabel = customtkinter.CTkLabel(self.right_side_dash, 
+                text_label = customtkinter.CTkLabel(self.right_side_dash, 
                                                    text=text, 
                                                    font=customtkinter.CTkFont(size=20))
-                textLabel.pack(pady=100)
+                text_label.pack(pady=100)
             elif mode == "table":
-                textLabel = customtkinter.CTkLabel(self.right_side_dash, 
+                text_label = customtkinter.CTkLabel(self.right_side_dash, 
                                                    text="Enter Start Date", 
                                                    font=customtkinter.CTkFont(size=20))
-                textLabel.pack(pady=5)
-                startDate = DateEntry(self.right_side_dash, background="#242424")
-                startDate.pack(pady=10)
-                textLabel = customtkinter.CTkLabel(self.right_side_dash, 
+                text_label.pack(pady=5)
+                start_date = DateEntry(self.right_side_dash, background="#242424")
+                start_date.pack(pady=10)
+                text_label = customtkinter.CTkLabel(self.right_side_dash, 
                                                    text="Enter End Date", 
                                                    font=customtkinter.CTkFont(size=20))
-                textLabel.pack(pady=5)
-                endDate = DateEntry(self.right_side_dash, background="#242424")
-                endDate.pack(pady=10)
-                getDateBtn = customtkinter.CTkButton(self.right_side_dash, 
+                text_label.pack(pady=5)
+                end_date = DateEntry(self.right_side_dash, background="#242424")
+                end_date.pack(pady=10)
+                get_date_btn = customtkinter.CTkButton(self.right_side_dash, 
                                                      text="Get Active Habits", 
-                                                     command=getDateandSubmit)
-                getDateBtn.pack(pady=10)
+                                                     command=get_date_and_submit)
+                get_date_btn.pack(pady=10)
 
-        data = [Habit(d["habit_id"], 
-                      d["title"], 
-                      d["description"], 
-                      d["frequency"], 
-                      d["category"], 
-                      d["significance"], 
-                      d["progress_entries"], 
-                      d["end_date"], 
-                      "edit", 
-                      "1", 
-                      d["next_deadline"]) for d in data]
+        habits = []
+        for datum in data:
+            current = Habit(
+                        datum["title"], 
+                        datum["description"], 
+                        datum["frequency"], 
+                        datum["category"], 
+                        datum["significance"], 
+                        datum["progress_entries"], 
+                        datum["last_done"], 
+                        "edit",
+                        datum["habit_id"]
+            )
+            current.start_date = datetime.fromisoformat(datum["start_date"]).date()
+            current.successes = datum["successes"]
+            current.current_streak = datum["current_streak"]
+            current.longest_streak = datum["longest_streak"]
+            current.next_deadline = datum["next_deadline"]
+            current.goal = datum["goal"]
+            habits.append(current)
         analytics_methods = Analytics()
 
         self.right_left_side_panel = customtkinter.CTkFrame(self.right_dashboard, 
@@ -814,118 +869,165 @@ class App(customtkinter.CTk):
                                                       9, 10, 11, 12, 13, 14, 15), 
                                                       weight=0)
         
-        self.logo_label_edit = customtkinter.CTkLabel(self.right_left_side_panel, 
-                                                      text="Choose an option \n from Below", 
+        self.goal_label = customtkinter.CTkLabel(self.right_left_side_panel, 
+                                                      text="Choose an option", 
                                                       font=customtkinter.CTkFont(size=20, weight="bold"))
-        self.logo_label_edit.grid(row=1, column=0, padx=10, pady=(20, 10))
-    
-        averageRemainingTime = analytics_methods.average_remaining_time(data)
-        self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Average Remaining Time", 
-                                               command=partial(makeTable, 
-                                                               "remainingTime", 
-                                                               [d.__dict__  for d in data],
-                                                               averageRemainingTime))
-        self.bt_save.grid(row=2, column=0, padx=20, pady=(50, 0))
+        self.goal_label.grid(row=1, column=0, padx=10, pady=(10, 5))
         
-        activeHabits = analytics_methods.active_habits(data)
+        analytics_button_width = 200
+        def get_habit_and_value(habits, habit_id, prompt):
+            for habit in habits:
+                if habit.habit_id == habit_id:
+                    return habit, prompt(habit)
+
+        active_habits = analytics_methods.active_habits(habits)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Active Habits", 
-                                               width=155, 
-                                               command=partial(makeTable, 
+                                               text="Active habits", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_table, 
                                                                "activeHabits", 
-                                                               [d.__dict__  for d in activeHabits], 
-                                                               activeHabits))
+                                                               [habit.__dict__  for habit in active_habits], 
+                                                               active_habits))
+        self.bt_save.grid(row=2, column=0, padx=20, pady=(25, 0))
+
+        self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
+                                               text="Habits of given frequency", 
+                                               width=analytics_button_width, 
+                                               command=make_habits_with_frequency_table)
         self.bt_save.grid(row=3, column=0, padx=20, pady=(5, 0))
 
-        averageStreakLength = analytics_methods.average_streak_length(data)
+        top_streak_habit_id = analytics_methods.top_streak_habit(habits)
+        top_streak_habit, top_streak = get_habit_and_value(habits, 
+                                                           top_streak_habit_id, 
+                                                           lambda habit: habit.longest_streak)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Average Streak Length", 
-                                               width=155, 
-                                               command=partial(makeTable, 
-                                                               "streaklength", 
-                                                               [d.__dict__  for d in data], 
-                                                               averageStreakLength))
+                                               text="Top streak habit", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
+                                                               "single", 
+                                                               f"The habit with best streak is {top_streak_habit.title}\n with a streak of {top_streak}"))
         self.bt_save.grid(row=4, column=0, padx=20, pady=(5, 0))
 
+        longest_streaks = [analytics_methods.get_longest_streak(habit) for habit in habits]
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Habits in Period", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, "table"))
+                                               text="Longest streaks", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_table, 
+                                                               "topStreak", 
+                                                               [habit.__dict__ for habit in habits], 
+                                                               longest_streaks))
         self.bt_save.grid(row=5, column=0, padx=20, pady=(5, 0))
 
-        topStreakHabit = analytics_methods.top_streak_habit(data)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Top Streak", 
-                                               width=155, 
-                                               command=partial(makeTable, 
-                                                               "topStreak", 
-                                                               [d.__dict__  for d in data], 
-                                                               topStreakHabit))
+                                               text="Habits in period", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, "table"))
         self.bt_save.grid(row=6, column=0, padx=20, pady=(5, 0))
 
-        highestSuccessRate = analytics_methods.highest_success_rate(data)
+        def success_rate(habit):
+            days_since_creation = (datetime.now().date() - habit.start_date).days + 1
+            if habit.frequency == "weekly":
+                days_since_creation = datetime.now().date().isocalendar()[1] - habit.start_date.isocalendar()[1] + 1
+            elif habit.frequency == "monthly":
+                days_since_creation = ((datetime.now().date().year - habit.start_date.year) * 12 
+                                        + (datetime.now().date().month - habit.start_date.month) - 1 - len(habit.progress_entries)) + 1
+            days_with_progress = len(habit.progress_entries)
+            return days_with_progress / days_since_creation if days_since_creation else 0
+        highest_success_rate_id = analytics_methods.highest_success_rate(habits)
+        highest_success_rate_habit, highest_success_rate = get_habit_and_value(habits, 
+                                                                               highest_success_rate_id, 
+                                                                               success_rate)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Highest Success Rate", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, 
+                                               text="Highest success rate", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
                                                                "single", 
-                                                               f"the heighest failure rate is {highestSuccessRate}"))
+                                                               f"The habit with highest success rate is {highest_success_rate_habit.title}\n with a success rate of {highest_success_rate:.2f}"))
         self.bt_save.grid(row=7, column=0, padx=20, pady=(5, 0))
 
-        highestFailureRate = analytics_methods.highest_failure_rate(data)
+        def failure_rate(habit):
+            days_since_creation = (datetime.now().date() - habit.start_date).days + 1
+            if habit.frequency == "weekly":
+                days_since_creation = datetime.now().date().isocalendar()[1] - habit.start_date.isocalendar()[1] + 1
+            elif habit.frequency == "monthly":
+                days_since_creation = ((datetime.now().date().year - habit.start_date.year) * 12 
+                                        + (datetime.now().date().month - habit.start_date.month) - len(habit.progress_entries)) + 1
+            days_with_progress = len(habit.progress_entries)
+            return (days_since_creation - days_with_progress) / days_since_creation if days_since_creation else 0
+        highest_failure_rate_id = analytics_methods.highest_failure_rate(habits)
+        highest_failure_rate_habit, highest_failure_rate = get_habit_and_value(habits,
+                                                                               highest_failure_rate_id,
+                                                                               failure_rate)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Highest Failure Rate", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, 
+                                               text="Highest failure rate", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
                                                                "single", 
-                                                               f"the heighest failure rate is {highestFailureRate}"))
+                                                               f"The habit with highest failure rate is {highest_failure_rate_habit.title}\n with a failure rate of {highest_failure_rate:.2f}"))
         self.bt_save.grid(row=8, column=0, padx=20, pady=(5, 0))
 
-        overAllSuccess = analytics_methods.overall_successes(data)
+        overall_success = analytics_methods.overall_successes(habits)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Overall Success Rate", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, 
+                                               text="Total successes", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
                                                                "single", 
-                                                               f"Your Overall Success Rate is {overAllSuccess}"))
+                                                               f"Your total number of successes is {overall_success}"))
         self.bt_save.grid(row=9, column=0, padx=20, pady=(5, 0))
 
-        overAllfailure = analytics_methods.overall_failures(data)
+        overall_failure = analytics_methods.overall_failures(habits)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Overall Failure Rate", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, 
+                                               text="Total failures", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
                                                                "single", 
-                                                               f"Your Overall Failure Rate is {overAllfailure}"))
+                                                               f"Your total number of failures is {overall_failure}"))
         self.bt_save.grid(row=10, column=0, padx=20, pady=(5, 0))
 
-        topIntervalPerformance = analytics_methods.top_interval_performance(data)
+        top_category_performance = analytics_methods.top_category_performance(habits)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Overall Failure Rate", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, 
+                                               text="Top category performance", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
                                                                "single", 
-                                                               f"Your Top internal Perfomance is {topIntervalPerformance}"))
+                                                               f"The category with best perfomance is {top_category_performance}"))
         self.bt_save.grid(row=11, column=0, padx=20, pady=(5, 0))
 
-        topCatigoryPerformance = analytics_methods.top_category_performance(data)
+        top_frequency_performance = analytics_methods.top_frequency_performance(habits)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Overall Failure Rate", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, 
+                                               text="Top frequency performance",
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
                                                                "single", 
-                                                               f"Your Top Catigory Perfomance is {topCatigoryPerformance}"))
-        self.bt_save.grid(row=11, column=0, padx=20, pady=(5, 0))
+                                                               f"The frequency with best perfomance is {top_frequency_performance}"))
+        self.bt_save.grid(row=12, column=0, padx=20, pady=(5, 0))
 
-        averageStreakBreak = analytics_methods.average_streak_break(data)
+        average_streak_length = analytics_methods.average_streak_length(habits)
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Average Steak Beak", 
-                                               width=155, 
-                                               command=partial(habitInPeriadTableMaker, 
+                                               text="Average streak length", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
+                                                               "single",
+                                                               f"Your average streak length is {average_streak_length:.1f}"))
+        self.bt_save.grid(row=13, column=0, padx=20, pady=(5, 0))
+
+        average_streak_break = analytics_methods.average_streak_break(habits)
+        self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
+                                               text="Average streak break", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
                                                                "single", 
-                                                               f"Your average streak Break is {averageStreakBreak}"))
-        self.bt_save.grid(row=11, column=0, padx=20, pady=(5, 0))
+                                                               f"Your average streak break is {average_streak_break:.1f}"))
+        self.bt_save.grid(row=14, column=0, padx=20, pady=(5, 0))
+
+        average_remaining_time = analytics_methods.average_remaining_time(habits)
+        self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
+                                               text="Average remaining time", 
+                                               width=analytics_button_width, 
+                                               command=partial(make_habits_in_period_table, 
+                                                               "single",
+                                                               f"Your average remaining time is {average_remaining_time:.1f} day(s)"))
+        self.bt_save.grid(row=15, column=0, padx=20, pady=(5, 0))
 
     def edit_func(self):
         """
@@ -965,14 +1067,14 @@ class App(customtkinter.CTk):
         self.right_left_side_panel.grid_rowconfigure((0, 1, 2, 3), weight=0)
         self.right_left_side_panel.grid_rowconfigure((4, 5), weight=1)
         
-        self.logo_label_edit = customtkinter.CTkLabel(self.right_left_side_panel, 
+        self.goal_label = customtkinter.CTkLabel(self.right_left_side_panel, 
                                                       text="Edit Page! \n", 
                                                       font=customtkinter.CTkFont(size=20, weight="bold"))
-        self.logo_label_edit.grid(row=1, column=0, padx=20, pady=(20, 10))
+        self.goal_label.grid(row=1, column=0, padx=20, pady=(20, 10))
     
         
         self.bt_save = customtkinter.CTkButton(master=self.right_left_side_panel, 
-                                               text="Save Changes", 
+                                               text="Save changes", 
                                                command=partial(self.save_changes, 
                                                                "edit", 
                                                                self.dialog_habbit_number, 
@@ -986,7 +1088,7 @@ class App(customtkinter.CTk):
                                                     values=["daily", "weekly", "monthly"],
                                                     command=optionmenu_callback)
         self.combobox.grid(row=3, column=0, padx=20, pady=(10,0))
-        self.combobox.set("Select Periodicity")
+        self.combobox.set(self.selected_value["frequency"])
 
         self.bt_delete = customtkinter.CTkButton(master=self.right_left_side_panel, 
                                                  text="Delete", 
@@ -1007,72 +1109,64 @@ class App(customtkinter.CTk):
                                          padx=5, 
                                          pady=5)
         
-        self.right_right_top_side_panel = customtkinter.CTkFrame(self.right_right_side_panel,
-                                                                 width=580, 
-                                                                 corner_radius=10,
-                                                                 fg_color="grey")
-        self.right_right_top_side_panel.pack(side="top", fill="x")
-        
         self.right_right_bottom_side_panel = customtkinter.CTkFrame(self.right_right_side_panel,
                                                                     width=580, 
                                                                     corner_radius=10)
         self.right_right_bottom_side_panel.pack(side="top", fill="both")
         
-        self.habit_name_label_info = customtkinter.CTkLabel(self.right_right_top_side_panel, 
-                                                            text="Habit Name: {} \n".format(self.selected_value["title"]), 
-                                                            font=customtkinter.CTkFont(size=10, weight="bold"),
-                                                            anchor="sw")
-        self.habit_name_label_info.grid()
-
-        self.habit_description_label = customtkinter.CTkLabel(self.right_right_top_side_panel, 
-                                                              text="Habit Description: {} \n".format(self.selected_value["description"]), 
-                                                              font=customtkinter.CTkFont(size=10, weight="bold"),
-                                                              anchor="sw")
-        self.habit_description_label.grid()
-
-        self.goal_label = customtkinter.CTkLabel(self.right_right_top_side_panel, 
-                                                 text="Goal: {} \n".format(self.selected_value["significance"]), 
-                                                 font=customtkinter.CTkFont(size=10, weight="bold"),
-                                                 anchor="sw")
-        self.goal_label.grid()
-        
         self.habit_name_label_edit = customtkinter.CTkLabel(self.right_right_bottom_side_panel,
-                                                            text="Habit Name \n", 
+                                                            text="Habit name", 
                                                             font=customtkinter.CTkFont(size=20, weight="bold"))
-        self.habit_name_label_edit.pack()
+        self.habit_name_label_edit.pack(pady=(25, 0))
 
         self.habit_name_entry = customtkinter.CTkEntry(master=self.right_right_bottom_side_panel, 
                                                        corner_radius=10, 
                                                        fg_color="black", 
-                                                       width=580, 
+                                                       width=550, 
                                                        height=50)
+        self.habit_name_entry.insert(0, self.selected_value["title"])
         self.habit_name_entry.pack(padx=0, pady=20)
         
         self.habit_description_label_edit = customtkinter.CTkLabel(self.right_right_bottom_side_panel, 
-                                                                   text="Habit Description \n", 
+                                                                   text="Habit description", 
                                                                    font=customtkinter.CTkFont(size=20, weight="bold"))
         self.habit_description_label_edit.pack()
 
         self.habit_description_entry = customtkinter.CTkEntry(master=self.right_right_bottom_side_panel, 
                                                               corner_radius=10, 
                                                               fg_color="black", 
-                                                              width=580, 
+                                                              width=550, 
                                                               height=50)
+        self.habit_description_entry.insert(0, self.selected_value["description"])
         self.habit_description_entry.pack(padx=0, pady=20)
+
+        self.category_label_edit = customtkinter.CTkLabel(self.right_right_side_panel, 
+                                                text="Category", 
+                                                font=customtkinter.CTkFont(size=20, weight="bold"))
+        self.category_label_edit.pack()
+
+        self.category_entry = customtkinter.CTkEntry(master=self.right_right_side_panel, 
+                                                     corner_radius=10, 
+                                                     fg_color="black", 
+                                                     width=550, 
+                                                     height=50)
+        self.category_entry.insert(0, self.selected_value["category"])
+        self.category_entry.pack(padx=0, pady=20)
         
         self.goal_label_edit = customtkinter.CTkLabel(self.right_right_bottom_side_panel, 
-                                                      text="Goal \n", 
+                                                      text="Goal", 
                                                       font=customtkinter.CTkFont(size=20, weight="bold"))
         self.goal_label_edit.pack()
 
         self.goal_entry = customtkinter.CTkEntry(master=self.right_right_bottom_side_panel, 
                                                  corner_radius=10, 
                                                  fg_color="black", 
-                                                 width=580, 
+                                                 width=550, 
                                                  height=50)
+        self.goal_entry.insert(0, self.selected_value["goal"])
         self.goal_entry.pack(padx=0, pady=20)
     
-    def openHistory(self, selected):
+    def open_history(self, selected):
         """
         Open a history window to display when the habit was marked.
 
@@ -1082,20 +1176,18 @@ class App(customtkinter.CTk):
         Args:
         selected (dict): The selected habit's data.
         """
-        topLevel = customtkinter.CTkToplevel(self)
-        topLevel.geometry("600x400")
-        topLevel.resizable(False, False)
-        topLevel.title("Last Times when you mark the habits")
-        progessList = selected["progress_entries"]
-        topLevel.wm_attributes('-topmost', 1)
+        top_level = customtkinter.CTkToplevel(self)
+        top_level.geometry("600x400")
+        top_level.resizable(False, False)
+        top_level.title("Last times when you mark the habits")
+        progress_list = selected["progress_entries"]
+        top_level.wm_attributes('-topmost', 1)
 
-        if len(progessList) > 1:
-            del progessList[0]
-
-        cols = ["Time", "Date"]
-        treescroll = ttk.Scrollbar(topLevel,)
+        cols = ["Date", "Time"]
+        treescroll = ttk.Scrollbar(top_level,)
         treescroll.pack(side="right", fill="y")
-        treeview = ttk.Treeview(topLevel,show="headings", 
+        treeview = ttk.Treeview(top_level, 
+                                show="headings", 
                                 yscrollcommand=treescroll.set, 
                                 columns=cols, 
                                 height=13)
@@ -1106,15 +1198,16 @@ class App(customtkinter.CTk):
                       pady=5)
         treescroll.config(command=treeview.yview)
         
-        treeview.column("Time", width=200)
         treeview.column("Date", width=200)
+        treeview.column("Time", width=200)
         
-        treeview.heading("Time", text="Time")
         treeview.heading("Date", text="Date")
+        treeview.heading("Time", text="Time")
 
         count = 1
-        for record in progessList:
-            lists = [record["date"], record["time"]]
+        for record in progress_list:
+            timestamp = datetime.fromisoformat(record["timestamp"])
+            lists = [timestamp.date(), timestamp.time()]
             treeview.insert(parent="", 
                             index=tkinter.END, 
                             iid=count, 
